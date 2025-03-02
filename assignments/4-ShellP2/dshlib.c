@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include "dshlib.h"
+#include <errno.h>
 
 
 void remove_spaces(char* str) {
@@ -36,13 +37,11 @@ void remove_duplicate_spaces(char* str) {
     int index, next;
     bool in_quotes = false;
     int len = strlen(str);
-    printf("Length in remove dup space: %d\n", len);
     next = 0;
 
     for (index = 0; index < len; index++) {
         if (str[index] == '"') {
             in_quotes = !in_quotes;
-            // printf("FOund quotes at: %d\n", index);
         }
         if ((in_quotes == false) && 
             ((str[index] == ' ') ||
@@ -66,12 +65,13 @@ int free_cmd_buff(cmd_buff_t *cmd_buff) {
     
 
 int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff) {
-    int rc = 0;
-    // int count = 0;
-    // bool in_quotes = false;
-
+    int rc = OK;
     char *cmd_copy;
-    cmd_copy = (char*)malloc(strlen(cmd_line)+1);
+    cmd_copy = (char*)malloc(strlen(cmd_line) + 1);
+    // adding checks for memory leaks
+    if (cmd_copy == NULL) { 
+        return ERR_MEMORY;
+    }
     strcpy(cmd_copy, cmd_line);
 
     //trim leading and trailing spaces
@@ -79,109 +79,157 @@ int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff) {
 
     // remove duplicate spaces outside quoted strings
     remove_duplicate_spaces(cmd_copy);
-    // printf("Removed duplicate spaces: %s\n", cmd_copy);
     
-    // using _cmd_buff to store the command??
-    // cmd_buff->_cmd_buffer = (char*)malloc(SH_CMD_MAX);
-    // strncpy(cmd_buff->_cmd_buffer, cmd_copy, strlen(cmd_copy));
-
-    // quoted strings with spaces are single arguments
-    // const char *start = cmd_copy;
-    // const char *end;
-    // cmd_buff->argc = 0;
-
-    // while (*start != '\0') {
-    //     if (cmd_buff->argc > CMD_MAX) {
-    //         rc = ERR_TOO_MANY_COMMANDS;
-    //         break;
-    //     }
-    //     // Check for a quoted string
-    //     if (*start == '"') {
-    //         in_quotes = true;
-    //         *start++;
-    //         end = strchr(start, '"');
-    //     } else {
-    //         end = strchr(start, ' ');
-    //         in_quotes = false;
-    //     }
-
-    //     if (end == NULL || *end == '\0') {
-    //         end = start + strlen(start);
-    //     }
-
-    //     // Copy the argument
-    //     int length = end - start;
-    //     cmd_buff->argv[cmd_buff->argc] = (char*)malloc(length + 1);
-    //     strncpy(cmd_buff->argv[cmd_buff->argc], start, length);
-    //     cmd_buff->argv[cmd_buff->argc][length] = '\0';
-
-    //     cmd_buff->argc += 1;
-    //     if (in_quotes == true) {
-    //         *start = *(end + 1);
-    //     }
-    //     else {
-    //         *start = *end;
-    //     }
-    // } 
-    // // cmd_buff->argc = count;
-    // printf("argc valueeeeee: %d\n", cmd_buff->argc);
-    // cmd_buff->argv[cmd_buff->argc] = NULL;
-
     int i = 0;
     int len = strlen(cmd_copy);
     char *arg_start = NULL;
-    int inside_quotes = 0;
-
-    // Initialize argc to 0
+    int in_quotes = 0;
     cmd_buff->argc = 0;
 
-    while (i < len && cmd_buff->argc < CMD_MAX)
-    {
+    if (len == 0 || cmd_copy[0] == '\0') {
+        free(cmd_copy);
+        return WARN_NO_CMDS;
+    }
 
-        // Check for opening quote
-        if (cmd_copy[i] == '"' && !inside_quotes)
-        {
-            inside_quotes = 1;
+    while (i < len) {
+        // if more than 8 commands:
+        if (cmd_buff->argc > CMD_MAX) {
+            // printf("IAM HERE\n");
+            return ERR_TOO_MANY_COMMANDS;
+        }
+        // opening quote
+        if (cmd_copy[i] == '"' && !in_quotes) {
+            in_quotes = 1;
             i++;
-            arg_start = (char *)&cmd_copy[i];
+            arg_start = &cmd_copy[i];
             continue;
         }
 
-        // Check for closing quote
-        if (cmd_copy[i] == '"' && inside_quotes)
-        {
-            inside_quotes = 0;
-            cmd_copy[i] = '\0'; // Terminate the argument at the quote position
-            cmd_buff->argv[cmd_buff->argc++] = (char *)arg_start;
+        // closing quote
+        if (cmd_copy[i] == '"' && in_quotes) {
+            in_quotes = 0;
+            cmd_copy[i] = '\0'; // end at quote
+            cmd_buff->argv[cmd_buff->argc] = (char *)malloc(strlen(arg_start) + 1);
+            if (cmd_buff->argv[cmd_buff->argc] == NULL) { 
+                free(cmd_copy);
+                return ERR_MEMORY;
+            }
+            strcpy(cmd_buff->argv[cmd_buff->argc++], arg_start);
+            arg_start = NULL;
             i++;
             continue;
         }
 
-        // If not inside quotes and we hit a space, end of the argument
-        if (isspace(cmd_copy[i]) && !inside_quotes)
-        {
-            cmd_copy[i] = '\0'; // Null-terminate the argument
-            cmd_buff->argv[cmd_buff->argc++] = (char *)&cmd_copy[arg_start - cmd_copy];
+        // if not in quotes and it's a space, end of the arg
+        if ((cmd_copy[i] == ' ' || cmd_copy[i] == '\t' || cmd_copy[i] == '\n') && !in_quotes) {
+            cmd_copy[i] = '\0'; // ends the arg
+            if (arg_start != NULL) {
+                cmd_buff->argv[cmd_buff->argc] = (char *)malloc(strlen(arg_start) + 1);
+                if (cmd_buff->argv[cmd_buff->argc] == NULL) { 
+                    free(cmd_copy);
+                    return ERR_MEMORY;
+                }
+                strcpy(cmd_buff->argv[cmd_buff->argc++], arg_start);
+                arg_start = NULL;
+            }
             i++;
             continue;
         }
+        // if at the start of an argument, save the position
+        if (arg_start == NULL && cmd_copy[i] != ' ' && cmd_copy[i] != '\t' && cmd_copy[i] != '\n') {
+            arg_start = &cmd_copy[i];
+        }
 
-        // Otherwise, just move to the next character
+        // now move to next character
         i++;
     }
 
-    // If there is an argument left that wasn't added
-    if (i < len && cmd_buff->argc < CMD_MAX)
-    {
-        cmd_buff->argv[cmd_buff->argc++] = (char *)&cmd_copy[arg_start - cmd_copy];
+    // to add the last arg if not added
+    if (arg_start != NULL && cmd_buff->argc < CMD_MAX) {
+        cmd_buff->argv[cmd_buff->argc] = (char *)malloc(strlen(arg_start) + 1);
+        if (cmd_buff->argv[cmd_buff->argc] == NULL) { 
+            free(cmd_copy);  
+            return ERR_MEMORY;
+        }
+        strcpy(cmd_buff->argv[cmd_buff->argc++], arg_start);
     }
     cmd_buff->argv[cmd_buff->argc] = NULL;
-
-    
+    // printf("argc: %d\n", cmd_buff->argc);
+    free(cmd_copy);
     return rc;
 }
 
 
+Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd) {
+    if (strcmp(cmd->argv[0], EXIT_CMD) == 0) {
+        return BI_CMD_EXIT;
+    }
+    if (strcmp(cmd->argv[0], "cd") == 0) {
+        // printf("Its 'CD'\n");
+        if (cmd->argc == 1) {
+            return BI_EXECUTED;
+        }
+        if (chdir(cmd->argv[1]) != 0) {
+            printf("Error changing dir to %s\n", cmd->argv[1]);
+        }
+        return BI_EXECUTED;
+    }
+    if (strcmp(cmd->argv[0], "dragon") == 0) {
+        printf("Not implemented yet\n");
+        return BI_EXECUTED;
+    }
+    if (strcmp(cmd->argv[0], "rc") == 0) {
+        return BI_RC;
+    }
+    return BI_NOT_BI;
+}
+
+int exec_cmd(cmd_buff_t *cmd) {
+    // class demo code
+    int f_result, c_result;
+
+    f_result = fork();
+    if (f_result < 0) {
+        exit(ERR_EXEC_CMD);  // fork failed, return
+    }
+
+    if (f_result == 0) {
+        //Exec of child
+        int rc;
+
+        rc = execvp(cmd->argv[0], cmd->argv);
+        // if (rc < 0) {
+        //     return rc;   //fork failed, return
+        // }
+        if (rc == ENOENT) {
+            printf("No such file or directory\n");
+            exit(rc);
+        }
+        if (rc == EACCES) {
+            printf("Permission denied\n");
+            exit(rc);
+        }
+        if (rc == EBADF) {
+            printf("Bad file descriptor\n");
+            exit(rc);
+        }
+        if (rc < 0) {
+            printf("Error executing command\n");
+            exit(rc);   //fork failed, return
+        }
+    } 
+    else {
+        // printf("[p] Parent process id is %d\n", getpid());
+        // printf("[p] Child process id is %d\n", f_result);
+        wait(&c_result);
+
+        // printf("[p] The child exit status is %d\n", WEXITSTATUS(c_result));
+        
+        return WEXITSTATUS(c_result);
+    }
+    return OK;
+    
+}
 
 
 /*
@@ -232,6 +280,8 @@ int exec_local_cmd_loop()
     char *cmd_buff = (char*)malloc(SH_CMD_MAX);
     int rc = 0;
     int result = 0;
+    int built_in_rc = 0;
+    int exec_rc = 0;
     cmd_buff_t cmd = {0};
 
     // TODO IMPLEMENT MAIN LOOP:
@@ -249,7 +299,7 @@ int exec_local_cmd_loop()
         // printf("Cmd: %s\n", cmd_buff);
 
         if (strcmp(cmd_buff, "") == 0) {
-            printf(CMD_WARN_NO_CMD);
+            // printf(CMD_WARN_NO_CMD);
             continue;
         }
 
@@ -263,16 +313,50 @@ int exec_local_cmd_loop()
         // parsing input to cmd_buff_t *cmd_buff
         result = build_cmd_buff(cmd_buff, &cmd);
 
-        printf("argc: %d\n", cmd.argc);
-        for (int i = 0; i < cmd.argc; i++) {
-            printf("argv[%d]: %s\n", i, cmd.argv[i]);
+        // DEBUG PRINTING:
+        // printf("argc: %d\n[", cmd.argc);
+        // for (int i = 0; i < cmd.argc; i++) {
+        //     printf("'%s'", cmd.argv[i]);
+        // }
+        // printf("]\n");
+
+        switch(result) {
+            case ERR_TOO_MANY_COMMANDS:
+                printf(CMD_ERR_PIPE_LIMIT, CMD_MAX);
+                continue;
+            case WARN_NO_CMDS:
+                continue;
+            case ERR_MEMORY:
+                rc = ERR_MEMORY;
+                break;
         }
 
-        // TODO IMPLEMENT if built-in command, execute builtin logic for exit, cd (extra credit: dragon)
+        // if built-in command, execute builtin logic for exit, cd (extra credit: dragon)
         // the cd command should chdir to the provided directory; if no directory is provided, do nothing
 
-        // TODO IMPLEMENT if not built-in command, fork/exec as an external command
-        // for example, if the user input is "ls -l", you would fork/exec the command "ls" with the arg "-l"
+        built_in_rc = exec_built_in_cmd(&cmd);
+
+        if (built_in_rc == BI_CMD_EXIT) { // exit
+            free_cmd_buff(&cmd);
+            free(cmd_buff);
+            rc = OK;
+            return rc;;
+        }
+        if (built_in_rc == BI_EXECUTED) { // done with this command, get next
+            continue;
+        }
+        if (built_in_rc == BI_RC) {
+            printf("%d\n", exec_rc);
+            continue;
+        }
+        
+        // if not built-in command, fork/exec as an external command
+
+        exec_rc = exec_cmd(&cmd);
+        if (exec_rc == ERR_EXEC_CMD) {
+            // printf("%d\n", exec_rc);
+            printf("Error executing command\n");
+        }
 
     }
 
