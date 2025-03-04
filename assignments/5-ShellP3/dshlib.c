@@ -103,8 +103,8 @@ int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff) {
 
     while (i < len) {
         // if more than 8 commands:
-        if (cmd_buff->argc > CMD_MAX) {
-            // printf("IAM HERE\n");
+        if (cmd_buff->argc >= CMD_MAX) {
+            free(cmd_copy);
             return ERR_TOO_MANY_COMMANDS;
         }
         // opening quote
@@ -164,7 +164,6 @@ int build_cmd_buff(char *cmd_line, cmd_buff_t *cmd_buff) {
         strcpy(cmd_buff->argv[cmd_buff->argc++], arg_start);
     }
     cmd_buff->argv[cmd_buff->argc] = NULL;
-    // printf("argc: %d\n", cmd_buff->argc);
     free(cmd_copy);
     return rc;
 }
@@ -234,7 +233,6 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd) {
         return BI_CMD_EXIT;
     }
     if (strcmp(cmd->argv[0], "cd") == 0) {
-        // printf("Its 'CD'\n");
         if (cmd->argc == 1) {
             return BI_EXECUTED;
         }
@@ -253,63 +251,24 @@ Built_In_Cmds exec_built_in_cmd(cmd_buff_t *cmd) {
     return BI_NOT_BI;
 }
 
-// int exec_cmd(cmd_buff_t *cmd) {
-//     // class demo code
-//     int f_result, c_result;
-
-//     f_result = fork();
-//     if (f_result < 0) {
-//         exit(ERR_EXEC_CMD);  // fork failed, return
-//     }
-
-//     if (f_result == 0) {
-//         //Exec of child
-//         int rc;
-
-//         rc = execvp(cmd->argv[0], cmd->argv);
-//         // if (rc < 0) {
-//         //     return rc;   //fork failed, return
-//         // }
-//         if (rc == ENOENT) {
-//             printf("No such file or directory\n");
-//             exit(rc);
-//         }
-//         if (rc == EACCES) {
-//             printf("Permission denied\n");
-//             exit(rc);
-//         }
-//         if (rc == EBADF) {
-//             printf("Bad file descriptor\n");
-//             exit(rc);
-//         }
-//         if (rc < 0) {
-//             printf("Error executing command\n");
-//             exit(rc);   //fork failed, return
-//         }
-//     } 
-//     else {
-//         // printf("[p] Parent process id is %d\n", getpid());
-//         // printf("[p] Child process id is %d\n", f_result);
-//         wait(&c_result);
-
-//         // printf("[p] The child exit status is %d\n", WEXITSTATUS(c_result));
-        
-//         return WEXITSTATUS(c_result);
-//     }
-//     return OK;
-    
-// }
-
 
 int execute_pipeline(command_list_t *clist) {
-    int pipes[clist->num - 1][2];  // Array of pipes
-    pid_t pids[clist->num];        // Array to store process IDs
+
+    if (clist->num == 1) {
+        int built_in_rc = exec_built_in_cmd(&clist->commands[0]);
+        if (built_in_rc != BI_NOT_BI) {
+            return OK;
+        }
+    }
+
+    int pipes[clist->num - 1][2];  
+    pid_t pids[clist->num];        
 
     // Create all necessary pipes
     for (int i = 0; i < clist->num - 1; i++) {
         if (pipe(pipes[i]) == -1) {
             perror("pipe");
-            exit(ERR_EXEC_CMD);
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -318,7 +277,7 @@ int execute_pipeline(command_list_t *clist) {
         pids[i] = fork();
         if (pids[i] == -1) {
             perror("fork");
-            exit(ERR_EXEC_CMD);
+            exit(EXIT_FAILURE);
         }
 
         if (pids[i] == 0) {  // Child process
@@ -341,7 +300,7 @@ int execute_pipeline(command_list_t *clist) {
             // Execute command
             execvp(clist->commands[i].argv[0], clist->commands[i].argv);
             perror("execvp");
-            exit(ERR_EXEC_CMD);
+            exit(EXIT_FAILURE);
         }
     }
 
@@ -410,8 +369,6 @@ int exec_local_cmd_loop()
     char *cmd_buff = (char*)malloc(SH_CMD_MAX);
     int rc = 0;
     int result = 0;
-    // int built_in_rc = 0;
-    // int exec_rc = 0;
 
     // MAIN LOOP:
     while (1)
@@ -426,6 +383,7 @@ int exec_local_cmd_loop()
             return OK;
             // break;
         }
+        
         // remove the trailing \n from cmd_buff
         cmd_buff[strcspn(cmd_buff, "\n")] = '\0';
 
@@ -436,8 +394,12 @@ int exec_local_cmd_loop()
             continue;
         }
 
+        if (strcmp(cmd_buff, "\0") == 0) {
+            return OK;
+        }
+
         if (strcmp(cmd_buff, EXIT_CMD) == 0) {
-            // free(cmd_buff);
+            free(cmd_buff);
             // rc = OK;
             // break;
             return OK;
@@ -473,22 +435,8 @@ int exec_local_cmd_loop()
         }
 
 
-        // TODO exec pipeline -> exec built-in / exec cmd
-        // rc = execute_pipeline(&cmds);
-
-        pid_t supervisor = fork();
-        if (supervisor == -1) {
-            perror("fork supervisor");
-            exit(ERR_EXEC_CMD);
-        }
-    
-        if (supervisor == 0) {  // Supervisor process
-            rc = execute_pipeline(&cmds);
-            exit(OK);
-        }
-    
-        // Main parent waits for supervisor
-        waitpid(supervisor, NULL, 0);
+        // exec pipeline -> exec built-in / exec cmd
+        rc = execute_pipeline(&cmds);
 
         free_cmd_list(&cmds);
 
