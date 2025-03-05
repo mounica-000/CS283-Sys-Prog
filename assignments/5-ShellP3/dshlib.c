@@ -337,6 +337,22 @@ int execute_pipeline(command_list_t *clist) {
                     clist->commands[i].argv[m] = NULL;
                     break;
                 }
+                // >> : append
+                if (strcmp(clist->commands[i].argv[m], ">>") == 0) {
+                    int flags = O_WRONLY | O_CREAT | O_APPEND;
+                    // open next arg as file to append
+                    int fd = open(clist->commands[i].argv[m+1], flags);
+                    if (fd < 0) {
+                        perror("file open");
+                        exit(EXIT_FAILURE);
+                    }
+                    dup2(fd, STDOUT_FILENO);
+                    // close souce fd
+                    close(fd);
+                    // remove >> from argv for execvp
+                    clist->commands[i].argv[m] = NULL;
+                    break;
+                }
             }
 
             // Execute command
