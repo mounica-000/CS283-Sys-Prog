@@ -297,6 +297,48 @@ int execute_pipeline(command_list_t *clist) {
                 close(pipes[j][1]);
             }
 
+            // extra credit redirection
+            // assignment instruction: modify command execution 
+            // to use dup2() in a similar way as you did for pipes; 
+            // you can copy the in and out fd's specified by the user 
+            // on to STDIN or STDOUT of the child's forked process
+            for (int m=0; m < clist->commands[i].argc; m++) {
+                // > : write to the file given
+                if (strcmp(clist->commands[i].argv[m], ">") == 0) {
+                    int flags = O_WRONLY | O_CREAT | O_TRUNC;
+                    mode_t mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP;
+                    // open next arg as file to write to
+                    int fd = open(clist->commands[i].argv[m+1], flags, mode);
+                    if (fd < 0) {
+                        perror("open");
+                        exit(EXIT_FAILURE);
+                    }
+                    // printf("I AM here\n");
+                    dup2(fd, STDOUT_FILENO);
+                    // close source fd
+                    close(fd);
+                    // stop the argv here for execvp
+                    clist->commands[i].argv[m] = NULL;
+                    break;
+                }
+                // < : read from the file
+                if (strcmp(clist->commands[i].argv[m], "<") == 0) {
+                    int flags = O_RDONLY;
+                    // open next arg as file to read from
+                    int fd = open(clist->commands[i].argv[m+1], flags);
+                    if (fd < 0) {
+                        perror("file open");
+                        exit(EXIT_FAILURE);
+                    }
+                    dup2(fd, STDIN_FILENO);
+                    // close souce fd
+                    close(fd);
+                    // remove < from argv for execvp
+                    clist->commands[i].argv[m] = NULL;
+                    break;
+                }
+            }
+
             // Execute command
             execvp(clist->commands[i].argv[0], clist->commands[i].argv);
             perror("execvp");
