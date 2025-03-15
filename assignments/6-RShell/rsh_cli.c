@@ -128,6 +128,17 @@ int exec_remote_cmd_loop(char *address, int port)
         
         // remove the trailing \n from cmd_buff
         cmd_buff[strcspn(cmd_buff, "\n")] = '\0';
+        char *cmd_cpy = (char*)malloc(strlen(cmd_buff) + 1);
+        if (cmd_cpy == NULL) {
+            return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_MEMORY);
+        }
+        strcpy(cmd_cpy, cmd_buff);
+        remove_spaces(cmd_cpy);
+        remove_duplicate_spaces(cmd_cpy);
+        if (strlen(cmd_cpy) == 0 || strcmp(cmd_cpy, "") == 0 || strcmp(cmd_cpy, "\0") == 0) {
+            free(cmd_cpy);
+            continue;
+        }
 
         if (strcmp(cmd_buff, "") == 0) {
             // printf(CMD_WARN_NO_CMD);
@@ -135,12 +146,25 @@ int exec_remote_cmd_loop(char *address, int port)
         }
 
         if (strcmp(cmd_buff, "\0") == 0) {
-            return client_cleanup(cli_socket, cmd_buff, rsp_buff, OK);
+            continue;
         }
 
         if (strcmp(cmd_buff, EXIT_CMD) == 0) {
             free(cmd_buff);
             return OK;
+        }
+
+        if (strcmp(cmd_buff, "stop-server") == 0) {
+            ret = send(cli_socket, cmd_buff, strlen(cmd_buff) +1, 0);
+            if (ret == -1) {
+                return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_RDSH_COMMUNICATION);
+            }
+            int bytes_sent;
+            bytes_sent = send(cli_socket, &RDSH_EOF_CHAR, 1, 0);    
+            if (bytes_sent != 1){
+                return client_cleanup(cli_socket, cmd_buff, rsp_buff, ERR_RDSH_COMMUNICATION);
+            }
+            return client_cleanup(cli_socket, cmd_buff, rsp_buff, OK);
         }
         
 
